@@ -1,14 +1,16 @@
 import os
 import time
 import uuid
+import uuid as uuid_lib
+import re
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import jwt
 import yaml
+from pydantic import BaseModel
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from collections import deque
 from prometheus_client import Counter, generate_latest
 
 START_TIME = time.time()
@@ -16,7 +18,7 @@ http_requests_total = Counter("http_requests_total", "Total HTTP Requests")
 logs_queue = deque(maxlen=100)
 app = FastAPI()
 
-EMAIL = "24f2001142@ds.study.iitm.ac.in"  # <-- put your actual IITM login email here
+EMAIL = "24f2001142@ds.study.iitm.ac.in"
 
 # ---------- Q1 config ----------
 Q1_ALLOWED_ORIGIN = "https://dash-uzy9zp.example.com"
@@ -85,8 +87,40 @@ def coerce(key, val):
 # ---------- Q5 config ----------
 Q5_API_KEY = "ak_ci8b7qisuhacpwro59ycmh08"
 
+# ---------- Q9 config ----------
+Q9_TOTAL_ORDERS = 43
+Q9_RATE_LIMIT = 17
+idempotency_store = {}
+rate_limit_buckets = {}
 
-# ============ MIDDLEWARE (Q1: CORS + timing headers) ============
+def check_rate_limit(client_id: str) -> bool:
+    now = time.time()
+    bucket = rate_limit_buckets.setdefault(client_id, deque())
+    while bucket and bucket[0] <= now - 10:
+        bucket.popleft()
+    if len(bucket) >= Q9_RATE_LIMIT:
+        return False
+    bucket.append(now)
+    return True
+
+# ---------- Q10 config ----------
+Q10_ALLOWED_ORIGIN = "https://app-5l6qf2.example.com"
+EXAM_PORTAL_ORIGIN = "https://exam.sanand.workers.dev"
+Q10_RATE_LIMIT = 11
+q10_rate_limit_buckets = {}
+
+def check_q10_rate_limit(client_id: str) -> bool:
+    now = time.time()
+    bucket = q10_rate_limit_buckets.setdefault(client_id, deque())
+    while bucket and bucket[0] <= now - 10:
+        bucket.popleft()
+    if len(bucket) >= Q10_RATE_LIMIT:
+        return False
+    bucket.append(now)
+    return True
+
+
+# ============ MIDDLEWARE ============
 @app.middleware("http")
 async def add_headers_and_cors(request: Request, call_next):
     start = time.time()
@@ -126,6 +160,7 @@ async def add_headers_and_cors(request: Request, call_next):
             response.headers["Access-Control-Allow-Methods"] = "*"
             response.headers["Access-Control-Allow-Headers"] = "*"
             response.headers["Access-Control-Expose-Headers"] = "*"
+
     response.headers["X-Request-ID"] = req_id
     response.headers["X-Process-Time"] = f"{time.time() - start:.6f}"
     return response
@@ -237,6 +272,9 @@ async def analytics(request: Request):
     response = JSONResponse(content=result)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
+
+
+# ============ Q6: observability ============
 @app.get("/work")
 async def do_work(n: int = 1):
     return {"email": EMAIL, "done": n}
@@ -254,9 +292,8 @@ async def healthz():
 async def logs_tail(limit: int = 10):
     return list(logs_queue)[-limit:]
 
-import re
-from pydantic import BaseModel
 
+# ============ Q8: /extract ============
 class InvoiceOut(BaseModel):
     vendor: str = ""
     amount: float = 0.0
@@ -274,15 +311,12 @@ async def extract(request: Request):
     if not text or not isinstance(text, str):
         return InvoiceOut()
 
-    # --- Date: YYYY-MM-DD anywhere ---
     date_match = re.search(r'(20\d{2}-\d{2}-\d{2})', text)
     date = date_match.group(1) if date_match else ""
 
-    # --- Currency: 3-letter code ---
     curr_match = re.search(r'\b(USD|EUR|GBP)\b', text, re.IGNORECASE)
     currency = curr_match.group(1).upper() if curr_match else ""
 
-    # --- Amount: currency symbol/code followed by a number ---
     amount = 0.0
     amount_match = re.search(
         r'(?:USD|EUR|GBP|\$|€|£)\s*([\d,]+(?:\.\d{1,2})?)',
@@ -298,7 +332,6 @@ async def extract(request: Request):
         if fallback_match:
             amount = float(fallback_match.group(1).replace(",", ""))
 
-    # --- Vendor: hyphenated-code style name (e.g. "Acme-xxxx Industries Ltd.") ---
     vendor = ""
     vendor_match = re.search(
         r'([A-Z][A-Za-z0-9]*-[A-Za-z0-9]{2,8}(?:\s+[A-Z][A-Za-z]+){0,4}\.?)',
@@ -307,7 +340,6 @@ async def extract(request: Request):
     if vendor_match:
         vendor = vendor_match.group(1)
     else:
-        # fallback: capitalized words ending in a common company suffix
         fallback_vendor = re.search(
             r'([A-Z][A-Za-z0-9&,\.\-\s]{2,50}?(?:Inc\.?|LLC|Ltd\.?|Corp\.?|Co\.|Industries))',
             text
@@ -317,30 +349,8 @@ async def extract(request: Request):
 
     return InvoiceOut(vendor=vendor, amount=amount, currency=currency, date=date)
 
-import uuid as uuid_lib
-from collections import deque
 
-Q9_TOTAL_ORDERS = 43
-Q9_RATE_LIMIT = 17
-
-idempotency_store = {}
-rate_limit_buckets = {}  # client_id -> deque of request timestamps
-
-def check_rate_limit(client_id: str) -> bool:
-    """Returns True if request should be allowed, False if rate-limited."""
-    now = time.time()
-    bucket = rate_limit_buckets.setdefault(client_id, deque())
-
-    while bucket and bucket[0] <= now - 10:
-        bucket.popleft()
-
-    if len(bucket) >= Q9_RATE_LIMIT:
-        return False
-
-    bucket.append(now)
-    return True
-
-
+# ============ Q9: /orders ============
 @app.post("/orders")
 async def create_order(request: Request):
     client_id = request.headers.get("X-Client-Id", "default")
@@ -383,23 +393,8 @@ async def get_orders(request: Request, limit: int = 10, cursor: str = None):
 
     return {"items": page, "next_cursor": next_cursor}
 
-Q10_ALLOWED_ORIGIN = "https://app-5l6qf2.example.com"
-EXAM_PORTAL_ORIGIN = "https://exam.sanand.workers.dev"
-Q10_RATE_LIMIT = 11
 
-q10_rate_limit_buckets = {}
-
-def check_q10_rate_limit(client_id: str) -> bool:
-    now = time.time()
-    bucket = q10_rate_limit_buckets.setdefault(client_id, deque())
-    while bucket and bucket[0] <= now - 10:
-        bucket.popleft()
-    if len(bucket) >= Q10_RATE_LIMIT:
-        return False
-    bucket.append(now)
-    return True
-
-
+# ============ Q10: /ping ============
 @app.get("/ping")
 async def ping(request: Request):
     client_id = request.headers.get("X-Client-Id", "default")
