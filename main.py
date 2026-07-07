@@ -8,7 +8,12 @@ import jwt
 import yaml
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from collections import deque
+from prometheus_client import Counter, generate_latest
 
+START_TIME = time.time()
+http_requests_total = Counter("http_requests_total", "Total HTTP Requests")
+logs_queue = deque(maxlen=100)
 app = FastAPI()
 
 EMAIL = "24f2001142@ds.study.iitm.ac.in"  # <-- put your actual IITM login email here
@@ -86,6 +91,13 @@ Q5_API_KEY = "ak_ci8b7qisuhacpwro59ycmh08"
 async def add_headers_and_cors(request: Request, call_next):
     start = time.time()
     req_id = str(uuid.uuid4())
+    http_requests_total.inc()
+    logs_queue.append({
+    "level": "INFO",
+    "ts": time.time(),
+    "path": request.url.path,
+    "request_id": req_id,
+    })
     origin = request.headers.get("origin")
 
     if request.method == "OPTIONS":
@@ -217,3 +229,19 @@ async def analytics(request: Request):
     response = JSONResponse(content=result)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
+@app.get("/work")
+async def do_work(n: int = 1):
+    return {"email": EMAIL, "done": n}
+
+@app.get("/metrics")
+async def get_metrics():
+    return Response(generate_latest(), media_type="text/plain")
+
+@app.get("/healthz")
+async def healthz():
+    uptime = time.time() - START_TIME
+    return {"status": "ok", "uptime_s": uptime}
+
+@app.get("/logs/tail")
+async def logs_tail(limit: int = 10):
+    return list(logs_queue)[-limit:]
