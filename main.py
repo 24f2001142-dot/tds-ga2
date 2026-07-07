@@ -91,24 +91,34 @@ Q5_API_KEY = "ak_ci8b7qisuhacpwro59ycmh08"
 async def add_headers_and_cors(request: Request, call_next):
     start = time.time()
     req_id = str(uuid.uuid4())
+    origin = request.headers.get("origin")
+    path = request.url.path.rstrip("/")
+    if path == "":
+        path = "/"
+
     http_requests_total.inc()
     logs_queue.append({
-    "level": "INFO",
-    "ts": time.time(),
-    "path": request.url.path,
-    "request_id": req_id,
+        "level": "INFO",
+        "ts": time.time(),
+        "path": request.url.path,
+        "request_id": req_id,
     })
-    origin = request.headers.get("origin")
 
     if request.method == "OPTIONS":
         response = Response(status_code=204)
     else:
         response = await call_next(request)
 
-    if origin == Q1_ALLOWED_ORIGIN:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "*"
+    if origin:
+        if path == "/stats":
+            if origin == Q1_ALLOWED_ORIGIN:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+                response.headers["Access-Control-Allow-Headers"] = "*"
+        else:
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "*"
+            response.headers["Access-Control-Allow-Headers"] = "*"
 
     response.headers["X-Request-ID"] = req_id
     response.headers["X-Process-Time"] = f"{time.time() - start:.6f}"
@@ -180,14 +190,6 @@ async def effective_config(request: Request):
 
 
 # ============ Q5: /analytics ============
-@app.options("/analytics")
-async def analytics_options():
-    response = Response(status_code=204)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
-
 @app.post("/analytics")
 async def analytics(request: Request):
     if request.headers.get("X-API-Key") != Q5_API_KEY:
