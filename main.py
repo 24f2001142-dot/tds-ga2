@@ -247,3 +247,66 @@ async def healthz():
 @app.get("/logs/tail")
 async def logs_tail(limit: int = 10):
     return list(logs_queue)[-limit:]
+
+import re
+from pydantic import BaseModel
+
+class InvoiceOut(BaseModel):
+    vendor: str = ""
+    amount: float = 0.0
+    currency: str = ""
+    date: str = ""
+
+@app.post("/extract", response_model=InvoiceOut)
+async def extract(request: Request):
+    try:
+        body = await request.json()
+        text = body.get("text", "")
+    except Exception:
+        return InvoiceOut()
+
+    if not text or not isinstance(text, str):
+        return InvoiceOut()
+
+    # --- Date: YYYY-MM-DD anywhere ---
+    date_match = re.search(r'(20\d{2}-\d{2}-\d{2})', text)
+    date = date_match.group(1) if date_match else ""
+
+    # --- Currency: 3-letter code ---
+    curr_match = re.search(r'\b(USD|EUR|GBP)\b', text, re.IGNORECASE)
+    currency = curr_match.group(1).upper() if curr_match else ""
+
+    # --- Amount: currency symbol/code followed by a number ---
+    amount = 0.0
+    amount_match = re.search(
+        r'(?:USD|EUR|GBP|\$|€|£)\s*([\d,]+(?:\.\d{1,2})?)',
+        text, re.IGNORECASE
+    )
+    if amount_match:
+        amount = float(amount_match.group(1).replace(",", ""))
+    else:
+        fallback_match = re.search(
+            r'(?:total|amount|due|balance|pay)\D{0,15}?([\d,]+(?:\.\d{1,2})?)',
+            text, re.IGNORECASE
+        )
+        if fallback_match:
+            amount = float(fallback_match.group(1).replace(",", ""))
+
+    # --- Vendor: hyphenated-code style name (e.g. "Acme-xxxx Industries Ltd.") ---
+    vendor = ""
+    vendor_match = re.search(
+        r'([A-Z][A-Za-z0-9]*-[A-Za-z0-9]{2,8}(?:\s+[A-Z][A-Za-z]+){0,4}\.?)',
+        text
+    )
+    if vendor_match:
+        vendor = vendor_match.group(1)
+    else:
+        # fallback: capitalized words ending in a common company suffix
+        fallback_vendor = re.search(
+            r'([A-Z][A-Za-z0-9&,\.\-\s]{2,50}?(?:Inc\.?|LLC|Ltd\.?|Corp\.?|Co\.|Industries))',
+            text
+        )
+        if fallback_vendor:
+            vendor = fallback_vendor.group(1).strip()
+
+    return InvoiceOut(vendor=vendor, amount=amount, currency=currency, date=date)
