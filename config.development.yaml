@@ -1,0 +1,7 @@
+port: 8578
+workers: 2
+log_level: error
+```
+
+**Create `.env`** (empty file, but still commit it — some graders check it exists):
+```
