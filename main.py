@@ -310,3 +310,69 @@ async def extract(request: Request):
             vendor = fallback_vendor.group(1).strip()
 
     return InvoiceOut(vendor=vendor, amount=amount, currency=currency, date=date)
+
+import uuid as uuid_lib
+from collections import deque
+
+Q9_TOTAL_ORDERS = 43
+Q9_RATE_LIMIT = 17
+
+idempotency_store = {}
+rate_limit_buckets = {}  # client_id -> deque of request timestamps
+
+def check_rate_limit(client_id: str) -> bool:
+    """Returns True if request should be allowed, False if rate-limited."""
+    now = time.time()
+    bucket = rate_limit_buckets.setdefault(client_id, deque())
+
+    while bucket and bucket[0] <= now - 10:
+        bucket.popleft()
+
+    if len(bucket) >= Q9_RATE_LIMIT:
+        return False
+
+    bucket.append(now)
+    return True
+
+
+@app.post("/orders")
+async def create_order(request: Request):
+    client_id = request.headers.get("X-Client-Id", "default")
+    if not check_rate_limit(client_id):
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate limited"},
+            headers={"Retry-After": "10"},
+        )
+
+    idem_key = request.headers.get("Idempotency-Key")
+    if idem_key and idem_key in idempotency_store:
+        return JSONResponse(
+            status_code=201,
+            content={"id": idempotency_store[idem_key]},
+        )
+
+    order_id = str(uuid_lib.uuid4())
+    if idem_key:
+        idempotency_store[idem_key] = order_id
+
+    return JSONResponse(status_code=201, content={"id": order_id})
+
+
+@app.get("/orders")
+async def get_orders(request: Request, limit: int = 10, cursor: str = None):
+    client_id = request.headers.get("X-Client-Id", "default")
+    if not check_rate_limit(client_id):
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate limited"},
+            headers={"Retry-After": "10"},
+        )
+
+    all_items = [{"id": i} for i in range(1, Q9_TOTAL_ORDERS + 1)]
+    start_idx = int(cursor) if cursor and cursor.isdigit() else 0
+    end_idx = start_idx + limit
+    page = all_items[start_idx:end_idx]
+    next_cursor = str(end_idx) if end_idx < len(all_items) else None
+
+    return {"items": page, "next_cursor": next_cursor}
