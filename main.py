@@ -83,3 +83,73 @@ async def verify_token(request: Request):
         }
     except Exception:
         return JSONResponse(status_code=401, content={"valid": False})
+
+import os
+from pathlib import Path
+import yaml  # add PyYAML to requirements.txt
+
+APP_ENV = os.environ.get("APP_ENV", "development")
+
+def load_defaults():
+    return {
+        "port": 8000,
+        "workers": 1,
+        "debug": False,
+        "log_level": "info",
+        "api_key": "default-secret-000",
+    }
+
+def load_yaml_config():
+    path = Path(f"config.{APP_ENV}.yaml")
+    if path.exists():
+        return yaml.safe_load(path.read_text()) or {}
+    return {}
+
+def load_dotenv_config():
+    # Manual .env parser so we control the NUM_WORKERS alias ourselves
+    path = Path(".env")
+    result = {}
+    mapping = {"NUM_WORKERS": "workers", "APP_PORT": "port",
+               "APP_DEBUG": "debug", "APP_LOG_LEVEL": "log_level",
+               "APP_API_KEY": "api_key"}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            result[mapping.get(k, k.lower())] = v.strip().strip('"').strip("'")
+    return result
+
+def load_os_env_config():
+    mapping = {"APP_PORT": "port", "APP_WORKERS": "workers",
+               "APP_DEBUG": "debug", "APP_LOG_LEVEL": "log_level",
+               "APP_API_KEY": "api_key"}
+    return {cfg_key: os.environ[env_key]
+            for env_key, cfg_key in mapping.items() if env_key in os.environ}
+
+def coerce(key, val):
+    if key in ("port", "workers"):
+        return int(val)
+    if key == "debug":
+        return val if isinstance(val, bool) else str(val).strip().lower() in ("true", "1", "yes", "on")
+    return str(val)
+
+@app.get("/effective-config")
+async def effective_config(request: Request):
+    cfg = {}
+    for loader in (load_defaults, load_yaml_config, load_dotenv_config, load_os_env_config):
+        cfg.update(loader())
+
+    for key, value in request.query_params.multi_items():
+        if key == "set" and "=" in value:
+            k, _, v = value.partition("=")
+            cfg[k.strip()] = v.strip()
+
+    result = {k: coerce(k, cfg.get(k)) for k in ("port", "workers", "debug", "log_level")}
+    result["api_key"] = "****"
+
+    response = JSONResponse(content=result)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
