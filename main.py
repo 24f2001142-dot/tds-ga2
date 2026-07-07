@@ -47,3 +47,39 @@ async def stats(values: str = ""):
         "max": max(nums),
         "mean": round(sum(nums) / len(nums), 6),
     }
+
+import jwt
+from fastapi import Request
+
+ISSUER = "https://idp.exam.local"
+AUDIENCE = "tds-1prufq2u.apps.exam.local"
+PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2okOHspNjgA+2rTLbeuY
+cxiP/hG8C6Sb9iwg3yiLAA4HCnpITcbWCSelbvbYGuc3EbNy4xFyf5Cbj5DHJMID
+EkryOgyd2giIIIBOUBj8S63uGcnRpOBh9NFatfNwheKuzsPuVNldu6A9cNteNpXc
+WyJjG2axVfmq7i6SuKr1JoWYG7xTTAvKPujSl4OtsQfO3h5NepzdfXpr28oNnzfW
+ed+zclR6BcmNNo/WVfJ4xyCLSf0BCOgdTgW6PdaChd1l9VDetJZVEgC5tkyvXsfI
+SI6iyrYbKR0NEBSqq4XkadEjsCs4F1RncsS4LlgniT7GlkL9Mce3b0wGLs9/7ZIX
+dQIDAQAB
+-----END PUBLIC KEY-----"""
+
+@app.post("/verify")
+async def verify_token(request: Request):
+    try:
+        body = await request.json()
+        token = body.get("token")
+        claims = jwt.decode(
+            token,
+            PUBLIC_KEY_PEM,
+            algorithms=["RS256"],
+            issuer=ISSUER,
+            audience=AUDIENCE,
+        )
+        return {
+            "valid": True,
+            "email": claims.get("email", ""),
+            "sub": claims.get("sub", ""),
+            "aud": claims.get("aud", ""),
+        }
+    except Exception:
+        return JSONResponse(status_code=401, content={"valid": False})
