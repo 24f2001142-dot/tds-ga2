@@ -90,7 +90,8 @@ Q5_API_KEY = "ak_ci8b7qisuhacpwro59ycmh08"
 @app.middleware("http")
 async def add_headers_and_cors(request: Request, call_next):
     start = time.time()
-    req_id = str(uuid.uuid4())
+    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.req_id = req_id
     origin = request.headers.get("origin")
     path = request.url.path.rstrip("/")
     if path == "":
@@ -112,6 +113,11 @@ async def add_headers_and_cors(request: Request, call_next):
     if origin:
         if path == "/stats":
             if origin == Q1_ALLOWED_ORIGIN:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+                response.headers["Access-Control-Allow-Headers"] = "*"
+        elif path == "/ping":
+            if origin == Q10_ALLOWED_ORIGIN or EXAM_PORTAL_ORIGIN in origin:
                 response.headers["Access-Control-Allow-Origin"] = origin
                 response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
                 response.headers["Access-Control-Allow-Headers"] = "*"
@@ -376,3 +382,28 @@ async def get_orders(request: Request, limit: int = 10, cursor: str = None):
     next_cursor = str(end_idx) if end_idx < len(all_items) else None
 
     return {"items": page, "next_cursor": next_cursor}
+
+Q10_ALLOWED_ORIGIN = "https://app-5l6qf2.example.com"
+EXAM_PORTAL_ORIGIN = "https://exam.sanand.workers.dev"
+Q10_RATE_LIMIT = 11
+
+q10_rate_limit_buckets = {}
+
+def check_q10_rate_limit(client_id: str) -> bool:
+    now = time.time()
+    bucket = q10_rate_limit_buckets.setdefault(client_id, deque())
+    while bucket and bucket[0] <= now - 10:
+        bucket.popleft()
+    if len(bucket) >= Q10_RATE_LIMIT:
+        return False
+    bucket.append(now)
+    return True
+
+
+@app.get("/ping")
+async def ping(request: Request):
+    client_id = request.headers.get("X-Client-Id", "default")
+    if not check_q10_rate_limit(client_id):
+        return JSONResponse(status_code=429, content={"error": "rate limited"})
+
+    return {"email": EMAIL, "request_id": request.state.req_id}
