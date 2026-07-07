@@ -3,3 +3,4 @@ uvicorn
 PyJWT
 cryptography
 pyyaml
+prometheus-client
