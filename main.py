@@ -153,3 +153,49 @@ async def effective_config(request: Request):
     response = JSONResponse(content=result)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
+
+from collections import defaultdict
+
+Q5_API_KEY = "ak_ci8b7qisuhacpwro59ycmh08"
+
+@app.post("/analytics")
+async def analytics(request: Request):
+    if request.headers.get("X-API-Key") != Q5_API_KEY:
+        response = JSONResponse(status_code=401, content={"error": "Unauthorized"})
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    try:
+        body = await request.json()
+        events = body.get("events", [])
+    except Exception:
+        response = JSONResponse(status_code=400, content={"error": "Invalid body"})
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    unique_users = set()
+    revenue = 0.0
+    user_totals = defaultdict(float)
+
+    for e in events:
+        user = e.get("user")
+        amount = e.get("amount", 0)
+        if user:
+            unique_users.add(user)
+        if amount > 0:
+            revenue += amount
+            if user:
+                user_totals[user] += amount
+
+    top_user = max(user_totals, key=user_totals.get) if user_totals else None
+
+    result = {
+        "email": EMAIL,
+        "total_events": len(events),
+        "unique_users": len(unique_users),
+        "revenue": round(revenue, 2),
+        "top_user": top_user,
+    }
+    response = JSONResponse(content=result)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
