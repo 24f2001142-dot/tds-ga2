@@ -199,3 +199,10 @@ async def analytics(request: Request):
     response = JSONResponse(content=result)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
+@app.options("/analytics")
+async def analytics_options():
+    response = Response(status_code=204)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
