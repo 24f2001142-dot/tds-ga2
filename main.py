@@ -119,7 +119,7 @@ async def add_headers_and_cors(request: Request, call_next):
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "*"
             response.headers["Access-Control-Allow-Headers"] = "*"
-
+            response.headers["Access-Control-Expose-Headers"] = "*"
     response.headers["X-Request-ID"] = req_id
     response.headers["X-Process-Time"] = f"{time.time() - start:.6f}"
     return response
